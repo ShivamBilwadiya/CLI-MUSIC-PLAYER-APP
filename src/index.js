@@ -26,48 +26,53 @@ if (!fs.existsSync(musicDir)) {
 
 // Function to play a song by its zero-based array index
 function playSong(index) {
-  // 1 & 2. Validate that the index is a valid array index before modifying player
+  // 1. Validate that the index is a valid array index before modifying player
   if (typeof index !== 'number' || Number.isNaN(index) || index < 0 || index >= songs.length) {
     console.log(`\nInvalid song selection. Please enter a number between 1 and ${songs.length}.`);
     return;
   }
 
-  // 3. If an existing player process is running, stop it before starting another song
+  // 2. If an existing player process is running, stop it before starting another song
   if (player) {
-    player.kill();
+    player.kill('SIGTERM');
     player = null;
   }
 
-  // 4 & 5. Update playback state and retrieve song filename
+  // 3. Update playback state and retrieve song filename
   cursor = index;
   currentIndex = index;
   const songFileName = songs[currentIndex];
-
-  // 6. Construct the complete song path using path.join()
   const songPath = path.join(musicDir, songFileName);
 
-  // 7 & 8. Start macOS afplay child process and store in player
-  player = spawn('afplay', [songPath]);
+  // 4. Start macOS afplay child process and keep a local reference
+  const currentProcess = spawn('afplay', [songPath]);
+  player = currentProcess;
 
-  // 9. Reset paused state on new playback
+  // 5. Reset paused state on new playback
   paused = false;
 
-  // 10. Print playing information and PID for debugging
+  // 6. Print playing information and PID for debugging
   console.log(`\nNow Playing: ${songFileName}`);
-  if (player.pid) {
-    console.log(`Playback process started (PID: ${player.pid})`);
+  if (currentProcess.pid) {
+    console.log(`Playback process started (PID: ${currentProcess.pid})`);
   }
 
-  // 11. Handle the child process close event when playback completes or ends
-  player.on('close', (code) => {
-    console.log(`\nPlayback ended for: ${songFileName} (Process closed with code ${code})`);
-    player = null;
+  // 7. Handle child process close event safely
+  // We check `player === currentProcess` so that an old process closing asynchronously
+  // does NOT accidentally overwrite the new active `player` to null.
+  currentProcess.on('close', (code) => {
+    if (player === currentProcess) {
+      console.log(`\nPlayback ended for: ${songFileName} (Process closed with code ${code})`);
+      player = null;
+    }
   });
 
   // Handle potential errors when launching the child process
-  player.on('error', (error) => {
+  currentProcess.on('error', (error) => {
     console.error(`\nPlayback process error: ${error.message}`);
-    player = null;
+    if (player === currentProcess) {
+      player = null;
+    }
   });
 }
 
@@ -84,12 +89,12 @@ function startInteractiveLoop() {
 
       if (trimmed === 'q' || trimmed === 'exit') {
         if (player) {
-          player.kill();
+          player.kill('SIGTERM');
           player = null;
         }
         console.log('Exiting CLI Music Player. Goodbye!');
         rl.close();
-        return;
+        process.exit(0);
       }
 
       const selectedNumber = parseInt(trimmed, 10);
@@ -102,6 +107,16 @@ function startInteractiveLoop() {
       promptUser();
     });
   }
+
+  // Ensure child process is killed if user presses Ctrl+C
+  process.on('SIGINT', () => {
+    if (player) {
+      player.kill('SIGTERM');
+      player = null;
+    }
+    console.log('\nExiting CLI Music Player. Goodbye!');
+    process.exit(0);
+  });
 
   promptUser();
 }
@@ -128,6 +143,7 @@ try {
 } catch (error) {
   console.error(`Error reading music directory: ${error.message}`);
 }
+
 
 
 
