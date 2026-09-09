@@ -7,10 +7,15 @@ const { spawn } = require('child_process');
 // `currentIndex`: Represents the index of the song currently being played
 // `player`: Represents the active macOS afplay ChildProcess instance
 // `paused`: Represents the playback pause state
+// `songDuration`: Represents the total duration in seconds of the currently playing song
+// `timeElapsed`: Represents the elapsed playback time in seconds
 let cursor = 0;
 let currentIndex = 0;
 let player = null;
 let paused = false;
+let songDuration = 0;
+let timeElapsed = 0;
+let progressTimer = null;
 
 let songs = [];
 
@@ -23,8 +28,35 @@ if (!fs.existsSync(musicDir)) {
   process.exit(1);
 }
 
+// Function to start the 1-second progress timer
+function startProgress(duration) {
+  // Clear any existing timer to prevent multiple concurrent timers
+  stopProgress();
+  if (duration !== undefined && duration > 0) {
+    songDuration = duration;
+  }
+  progressTimer = setInterval(() => {
+    // Only increment elapsed time if player is active and not paused
+    if (player && !paused) {
+      if (timeElapsed < songDuration) {
+        timeElapsed++;
+        drawMenu();
+      }
+    }
+  }, 1000);
+}
+
+// Function to stop and clear the progress timer
+function stopProgress() {
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+}
+
 // Function to clean up terminal state and exit
 function cleanupAndExit() {
+  stopProgress();
   if (player) {
     player.kill('SIGTERM');
     player = null;
@@ -39,14 +71,74 @@ function cleanupAndExit() {
   process.exit(0);
 }
 
+// Helper function to format seconds into mm:ss for beginner-friendly display
+function formatTime(seconds) {
+  if (!seconds || Number.isNaN(seconds) || seconds <= 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+// Function to generate a text-based progress bar string
+// Uses '█' for filled progress and '░' for remaining duration
+function createProgressBar(musicDuration, timeElapsed, musicbarWidth = 30) {
+  if (!musicDuration || musicDuration <= 0) {
+    return '░'.repeat(musicbarWidth);
+  }
+
+  // Calculate percentage of elapsed playback time (clamped between 0 and 1)
+  const pct = Math.min(Math.max(timeElapsed / musicDuration, 0), 1);
+
+  // Math.floor() ensures an integer count of discrete characters
+  const filled = Math.floor(pct * musicbarWidth);
+  const empty = musicbarWidth - filled;
+
+  return '█'.repeat(filled) + '░'.repeat(empty);
+}
+
+// Function to get the duration of an audio file in seconds using macOS `afinfo`
+// A Promise is used because child-process stdout stream collection is asynchronous.
+function getSongDuration(songPath) {
+  return new Promise((resolve) => {
+    // 1 & 2. Spawn external macOS `afinfo` command with the complete song path
+    const infoProcess = spawn('afinfo', [songPath]);
+    let output = '';
+
+    // 3 & 4. Read stdout chunks as Buffers, convert to strings, and accumulate
+    infoProcess.stdout.on('data', (chunk) => {
+      output += chunk.toString();
+    });
+
+    // 5 & 6. When the process finishes, extract the numeric duration in seconds
+    infoProcess.on('close', (code) => {
+      if (code === 0) {
+        // Regex matches lines like "estimated duration: 215.040000 sec"
+        const match = output.match(/estimated duration:\s*([\d.]+)\s*sec/i);
+        if (match && match[1]) {
+          const duration = parseFloat(match[1]);
+          resolve(duration);
+          return;
+        }
+      }
+      resolve(0);
+    });
+
+    // Gracefully handle any error during process execution without crashing
+    infoProcess.on('error', () => {
+      resolve(0);
+    });
+  });
+}
+
 // Function to play a song by its zero-based array index
-function playSong(index) {
+async function playSong(index) {
   // 1. Validate that the index is a valid array index before modifying player
   if (typeof index !== 'number' || Number.isNaN(index) || index < 0 || index >= songs.length) {
     return;
   }
 
-  // 2. If an existing player process is running, stop it before starting another song
+  // 2. Stop any existing playback and progress timer
+  stopProgress();
   if (player) {
     player.kill('SIGTERM');
     player = null;
@@ -54,23 +146,31 @@ function playSong(index) {
 
   // 3. Update playback state (currentIndex tracks playing song, cursor stays untouched)
   currentIndex = index;
+  timeElapsed = 0;
   const songFileName = songs[currentIndex];
   const songPath = path.join(musicDir, songFileName);
 
-  // 4. Start macOS afplay child process and keep a local reference
+  // 4. Retrieve song duration using afinfo before starting playback
+  songDuration = await getSongDuration(songPath);
+
+  // 5. Start macOS afplay child process and keep a local reference
   const currentProcess = spawn('afplay', [songPath]);
   player = currentProcess;
 
-  // 5. Reset paused state on new playback
+  // 6. Reset paused state on new playback and start the progress timer
   paused = false;
+  startProgress(songDuration);
 
-  // 6. Redraw menu to reflect playback status in place
+  // 7. Redraw menu to reflect playback status, duration, and progress bar in place
   drawMenu();
 
-  // 7. Handle child process close event safely
+  // 8. Handle child process close event safely
   currentProcess.on('close', (code) => {
     if (player === currentProcess) {
+      stopProgress();
       player = null;
+      timeElapsed = 0;
+      songDuration = 0;
       drawMenu();
     }
   });
@@ -78,7 +178,10 @@ function playSong(index) {
   // Handle potential errors when launching the child process
   currentProcess.on('error', (error) => {
     if (player === currentProcess) {
+      stopProgress();
       player = null;
+      timeElapsed = 0;
+      songDuration = 0;
       drawMenu();
     }
   });
@@ -101,10 +204,13 @@ function drawMenu() {
     }
   });
 
-  // Display currently playing song status if player is active
+  // Display currently playing song status, progress bar, and percentage
   if (player) {
     const statusLabel = paused ? "[Paused]" : "[Playing]";
+    const progressBar = createProgressBar(songDuration, timeElapsed, 20);
+    const pct = songDuration > 0 ? Math.min(100, Math.floor((timeElapsed / songDuration) * 100)) : 0;
     output += `\nNow Playing: ${songs[currentIndex]} ${statusLabel}\n`;
+    output += `[${progressBar}] ${pct}% (${formatTime(timeElapsed)} / ${formatTime(songDuration)})\n`;
   } else {
     output += `\nStatus: Stopped\n`;
   }
@@ -231,14 +337,3 @@ try {
 } catch (error) {
   console.error(`Error reading music directory: ${error.message}`);
 }
-
-
-
-
-
-
-
-
-
-
-
