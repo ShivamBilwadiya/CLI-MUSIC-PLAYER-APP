@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 const { spawn } = require('child_process');
 
 // Application state
@@ -24,11 +23,26 @@ if (!fs.existsSync(musicDir)) {
   process.exit(1);
 }
 
+// Function to clean up terminal state and exit
+function cleanupAndExit() {
+  if (player) {
+    player.kill('SIGTERM');
+    player = null;
+  }
+  if (process.stdin.setRawMode) {
+    process.stdin.setRawMode(false);
+  }
+  process.stdin.pause();
+
+  // Restore cursor visibility (\x1b[?25h) and leave alternate screen buffer (\x1b[?1049l)
+  process.stdout.write("\x1b[?25h\x1b[?1049l");
+  process.exit(0);
+}
+
 // Function to play a song by its zero-based array index
 function playSong(index) {
   // 1. Validate that the index is a valid array index before modifying player
   if (typeof index !== 'number' || Number.isNaN(index) || index < 0 || index >= songs.length) {
-    console.log(`\nInvalid song selection. Please enter a number between 1 and ${songs.length}.`);
     return;
   }
 
@@ -38,8 +52,7 @@ function playSong(index) {
     player = null;
   }
 
-  // 3. Update playback state and retrieve song filename
-  cursor = index;
+  // 3. Update playback state (currentIndex tracks playing song, cursor stays untouched)
   currentIndex = index;
   const songFileName = songs[currentIndex];
   const songPath = path.join(musicDir, songFileName);
@@ -51,74 +64,54 @@ function playSong(index) {
   // 5. Reset paused state on new playback
   paused = false;
 
-  // 6. Print playing information and PID for debugging
-  console.log(`\nNow Playing: ${songFileName}`);
-  if (currentProcess.pid) {
-    console.log(`Playback process started (PID: ${currentProcess.pid})`);
-  }
+  // 6. Redraw menu to reflect playback status in place
+  drawMenu();
 
   // 7. Handle child process close event safely
-  // We check `player === currentProcess` so that an old process closing asynchronously
-  // does NOT accidentally overwrite the new active `player` to null.
   currentProcess.on('close', (code) => {
     if (player === currentProcess) {
-      console.log(`\nPlayback ended for: ${songFileName} (Process closed with code ${code})`);
       player = null;
+      drawMenu();
     }
   });
 
   // Handle potential errors when launching the child process
   currentProcess.on('error', (error) => {
-    console.error(`\nPlayback process error: ${error.message}`);
     if (player === currentProcess) {
       player = null;
+      drawMenu();
     }
   });
 }
 
-// Function to handle continuous terminal input without exiting
-function startInteractiveLoop() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
+// Function to render the menu in place using ANSI escape sequences
+function drawMenu() {
+  // \x1b[H: Move cursor to home position (row 1, col 1)
+  // \x1b[J: Clear from cursor to end of screen (prevents scroll artifacts)
+  let output = "\x1b[H\x1b[J";
+
+  output += "========== CLI MUSIC PLAYER ==========\n\n";
+
+  songs.forEach((song, index) => {
+    // Visually indicate the currently selected menu item with '>'
+    if (index === cursor) {
+      output += `> ${index + 1}. ${song}\n`;
+    } else {
+      output += `  ${index + 1}. ${song}\n`;
+    }
   });
 
-  function promptUser() {
-    rl.question('\nEnter song number to play (or "q" to quit): ', (input) => {
-      const trimmed = input.trim().toLowerCase();
-
-      if (trimmed === 'q' || trimmed === 'exit') {
-        if (player) {
-          player.kill('SIGTERM');
-          player = null;
-        }
-        console.log('Exiting CLI Music Player. Goodbye!');
-        rl.close();
-        process.exit(0);
-      }
-
-      const selectedNumber = parseInt(trimmed, 10);
-      // Convert 1-based user input to 0-based array index
-      const zeroBasedIndex = selectedNumber - 1;
-
-      playSong(zeroBasedIndex);
-
-      // Prompt again for another input without ending the process
-      promptUser();
-    });
+  // Display currently playing song status if player is active
+  if (player) {
+    output += `\nNow Playing: ${songs[currentIndex]}\n`;
+  } else {
+    output += `\nStatus: Stopped\n`;
   }
 
-  // Ensure child process is killed if user presses Ctrl+C
-  process.on('SIGINT', () => {
-    if (player) {
-      player.kill('SIGTERM');
-      player = null;
-    }
-    console.log('\nExiting CLI Music Player. Goodbye!');
-    process.exit(0);
-  });
+  output += "\n(Use UP/DOWN arrows to navigate, ENTER to play, Ctrl+C to exit)\n";
 
-  promptUser();
+  // Write the entire screen in one single call to prevent any flicker or extra lines
+  process.stdout.write(output);
 }
 
 try {
@@ -132,17 +125,66 @@ try {
   if (songs.length === 0) {
     console.log("No MP3 files found in the music directory.");
   } else {
-    console.log("========== CLI MUSIC PLAYER ==========\n");
-    songs.forEach((song, index) => {
-      console.log(`${index + 1}. ${song}`);
+    // Switch to alternate screen buffer (\x1b[?1049h) and hide terminal cursor (\x1b[?25l)
+    // This creates a dedicated, stable screen viewport (like vim/htop) with no scroll jumps.
+    process.stdout.write("\x1b[?1049h\x1b[?25l");
+
+    // Initial draw of the menu
+    drawMenu();
+
+    // Enable raw mode:
+    // In standard "cooked" mode, the terminal waits for Enter before sending input.
+    // In "raw" mode, keypresses are sent immediately byte-by-byte without line buffering or echo.
+    if (process.stdin.setRawMode) {
+      process.stdin.setRawMode(true);
+    }
+
+    // Resume reading from stdin stream
+    process.stdin.resume();
+
+    // Listen for data events on process.stdin.
+    // `key` is a Node.js Buffer containing the raw binary byte(s) received from the terminal.
+    process.stdin.on("data", (key) => {
+      // 1. Detect Ctrl+C (byte value 3)
+      if (key[0] === 3) {
+        cleanupAndExit();
+        return;
+      }
+
+      // 2. Detect UP arrow (27 91 65)
+      if (key[0] === 27 && key[1] === 91 && key[2] === 65) {
+        if (cursor > 0) {
+          cursor--;
+          drawMenu();
+        }
+        return;
+      }
+
+      // 3. Detect DOWN arrow (27 91 66)
+      if (key[0] === 27 && key[1] === 91 && key[2] === 66) {
+        if (cursor < songs.length - 1) {
+          cursor++;
+          drawMenu();
+        }
+        return;
+      }
+
+      // 4. Detect ENTER key (byte value 13)
+      if (key[0] === 13) {
+        playSong(cursor);
+        return;
+      }
     });
 
-    // Start interactive continuous input loop
-    startInteractiveLoop();
+    // Handle OS interrupt signals for safe terminal restoration
+    process.on('SIGINT', cleanupAndExit);
   }
 } catch (error) {
   console.error(`Error reading music directory: ${error.message}`);
 }
+
+
+
 
 
 
