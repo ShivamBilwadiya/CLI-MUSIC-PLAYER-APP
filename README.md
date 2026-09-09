@@ -8,7 +8,7 @@ A lightweight, zero-dependency, terminal-based MP3 music player built with **Nod
 
 ```text
 ╔══════════════════════════════════════════════════════╗
-║                   CLI MUSIC PLAYER                   ║
+║                 🎧 CLI MUSIC PLAYER 🎧                ║
 ╠══════════════════════════════════════════════════════╣
 ║                                                      ║
 ║     > 1. Interstellar-Theme.mp3                      ║

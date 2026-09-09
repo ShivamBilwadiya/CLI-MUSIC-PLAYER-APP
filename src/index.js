@@ -249,6 +249,44 @@ function togglePause() {
 // 7. PROGRESS
 // =============================================================================
 
+// =============================================================================
+// ANSI COLOR DEFINITIONS
+// =============================================================================
+const COLORS = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  cyan: '\x1b[36m',
+  brightCyan: '\x1b[96m',
+  green: '\x1b[32m',
+  brightGreen: '\x1b[92m',
+  yellow: '\x1b[33m',
+  brightYellow: '\x1b[93m',
+  white: '\x1b[97m',
+  gray: '\x1b[90m',
+  border: '\x1b[36m',
+  title: '\x1b[1;96m',
+  selected: '\x1b[1;93m',
+  unselected: '\x1b[37m',
+  playing: '\x1b[1;92m',
+  paused: '\x1b[1;93m',
+  stopped: '\x1b[90m',
+  progressBarFilled: '\x1b[92m',
+  progressBarEmpty: '\x1b[90m',
+  timeCurrent: '\x1b[92m',
+  timeTotal: '\x1b[36m',
+  percentage: '\x1b[1;96m',
+  controlsKey: '\x1b[1;97m',
+  controlsDesc: '\x1b[90m'
+};
+
+/**
+ * Strips ANSI escape sequences to compute true visible string length.
+ */
+function stripAnsi(str) {
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 /**
  * Formats a duration in seconds into standard mm:ss notation.
  */
@@ -264,14 +302,14 @@ function formatTime(seconds) {
  */
 function createProgressBar(duration, elapsed, musicbarWidth = CONFIG.progressBarWidth) {
   if (!duration || duration <= 0) {
-    return '░'.repeat(musicbarWidth);
+    return `${COLORS.progressBarEmpty}${'░'.repeat(musicbarWidth)}${COLORS.reset}`;
   }
 
   const pct = Math.min(Math.max(elapsed / duration, 0), 1);
   const filled = Math.floor(pct * musicbarWidth);
   const empty = musicbarWidth - filled;
 
-  return '█'.repeat(filled) + '░'.repeat(empty);
+  return `${COLORS.progressBarFilled}${'█'.repeat(filled)}${COLORS.reset}${COLORS.progressBarEmpty}${'░'.repeat(empty)}${COLORS.reset}`;
 }
 
 /**
@@ -308,12 +346,14 @@ function stopProgress() {
 
 function formatBoxLine(content = '') {
   const maxContentLen = CONFIG.boxWidth - 2;
-  const trimmed = content.length > maxContentLen ? content.slice(0, maxContentLen - 3) + '...' : content;
-  return '║ ' + trimmed.padEnd(maxContentLen, ' ') + ' ║\n';
+  const visibleLen = stripAnsi(content).length;
+  const paddingNeeded = Math.max(0, maxContentLen - visibleLen);
+  return `${COLORS.border}║${COLORS.reset} ${content}${' '.repeat(paddingNeeded)} ${COLORS.border}║${COLORS.reset}\n`;
 }
 
 function centerText(text, width) {
-  const pad = Math.max(0, Math.floor((width - text.length) / 2));
+  const visibleLen = stripAnsi(text).length;
+  const pad = Math.max(0, Math.floor((width - visibleLen) / 2));
   return ' '.repeat(pad) + text;
 }
 
@@ -322,15 +362,19 @@ function centerText(text, width) {
  */
 function drawMenu() {
   let output = '';
-  output += '╔' + '═'.repeat(CONFIG.boxWidth) + '╗\n';
-  output += formatBoxLine(centerText('CLI MUSIC PLAYER', CONFIG.boxWidth - 2));
-  output += '╠' + '═'.repeat(CONFIG.boxWidth) + '╣\n';
+  output += `${COLORS.border}╔${'═'.repeat(CONFIG.boxWidth)}╗${COLORS.reset}\n`;
+  output += formatBoxLine(centerText(`${COLORS.title}🎧 CLI MUSIC PLAYER 🎧${COLORS.reset}`, CONFIG.boxWidth - 2));
+  output += `${COLORS.border}╠${'═'.repeat(CONFIG.boxWidth)}╣${COLORS.reset}\n`;
   output += formatBoxLine('');
 
   songs.forEach((song, index) => {
-    const marker = index === cursor ? '> ' : '  ';
-    const line = `  ${marker}${index + 1}. ${song}`;
-    output += formatBoxLine(line);
+    if (index === cursor) {
+      const line = `  ${COLORS.selected}> ${index + 1}. ${song}${COLORS.reset}`;
+      output += formatBoxLine(line);
+    } else {
+      const line = `    ${COLORS.unselected}${index + 1}. ${song}${COLORS.reset}`;
+      output += formatBoxLine(line);
+    }
   });
 
   output += formatBoxLine('');
@@ -342,15 +386,18 @@ function drawMenu() {
  */
 function drawNowPlaying() {
   let output = '';
-  output += '╠' + '═'.repeat(CONFIG.boxWidth) + '╣\n';
+  output += `${COLORS.border}╠${'═'.repeat(CONFIG.boxWidth)}╣${COLORS.reset}\n`;
 
   if (player) {
     const icon = paused ? '⏸' : '▶';
-    const statusLabel = paused ? '[Paused]' : '[Playing]';
+    const statusLabel = paused
+      ? `${COLORS.paused}[Paused]${COLORS.reset}`
+      : `${COLORS.playing}[Playing]${COLORS.reset}`;
     const playingSong = songs[currentIndex] || 'Unknown';
-    output += formatBoxLine(`${icon} Now Playing: ${playingSong} ${statusLabel}`);
+    const iconColored = paused ? `${COLORS.paused}${icon}${COLORS.reset}` : `${COLORS.playing}${icon}${COLORS.reset}`;
+    output += formatBoxLine(`${iconColored} ${COLORS.bold}Now Playing:${COLORS.reset} ${COLORS.white}${playingSong}${COLORS.reset} ${statusLabel}`);
   } else {
-    output += formatBoxLine('■ Status: Stopped');
+    output += formatBoxLine(`${COLORS.stopped}■ Status: Stopped${COLORS.reset}`);
   }
 
   output += formatBoxLine('');
@@ -366,9 +413,10 @@ function drawProgress() {
   const pct = musicDuration > 0 ? Math.min(100, Math.floor((timeElapsed / musicDuration) * 100)) : 0;
 
   if (player) {
-    output += formatBoxLine(`  [${progressBar}] ${pct}% (${formatTime(timeElapsed)} / ${formatTime(musicDuration)})`);
+    const timeStr = `${COLORS.timeCurrent}${formatTime(timeElapsed)}${COLORS.reset} ${COLORS.dim}/${COLORS.reset} ${COLORS.timeTotal}${formatTime(musicDuration)}${COLORS.reset}`;
+    output += formatBoxLine(`  [${progressBar}] ${COLORS.percentage}${pct}%${COLORS.reset} (${timeStr})`);
   } else {
-    output += formatBoxLine(`  [${progressBar}] 0%`);
+    output += formatBoxLine(`  [${progressBar}] ${COLORS.gray}0%${COLORS.reset}`);
   }
 
   output += formatBoxLine('');
@@ -380,9 +428,11 @@ function drawProgress() {
  */
 function drawControls() {
   let output = '';
-  output += formatBoxLine('↑↓ Navigate   Enter Play    p Pause/Resume');
-  output += formatBoxLine('n Next        b Previous    q / Ctrl+C Exit');
-  output += '╚' + '═'.repeat(CONFIG.boxWidth) + '╝\n';
+  const line1 = `${COLORS.controlsKey}↑↓${COLORS.controlsDesc} Navigate   ${COLORS.controlsKey}Enter${COLORS.controlsDesc} Play    ${COLORS.controlsKey}p${COLORS.controlsDesc} Pause/Resume`;
+  const line2 = `${COLORS.controlsKey}n${COLORS.controlsDesc} Next        ${COLORS.controlsKey}b${COLORS.controlsDesc} Previous    ${COLORS.controlsKey}q${COLORS.controlsDesc} / ${COLORS.controlsKey}Ctrl+C${COLORS.controlsDesc} Exit`;
+  output += formatBoxLine(line1);
+  output += formatBoxLine(line2);
+  output += `${COLORS.border}╚${'═'.repeat(CONFIG.boxWidth)}╝${COLORS.reset}\n`;
   process.stdout.write(output);
 }
 
