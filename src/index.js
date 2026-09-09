@@ -109,7 +109,7 @@ function drawMenu() {
     output += `\nStatus: Stopped\n`;
   }
 
-  output += "\n(UP/DOWN: Navigate | ENTER: Play | p: Pause/Resume | q: Quit)\n";
+  output += "\n(UP/DOWN: Navigate | ENTER: Play | p: Pause/Resume | n: Next | b: Prev | q: Quit)\n";
 
   // Write the entire screen in one single call to prevent any flicker or extra lines
   process.stdout.write(output);
@@ -196,6 +196,30 @@ try {
             paused = false;
             drawMenu();
           }
+        }
+        return;
+      }
+
+      // 6. Detect 'n' (byte value 110) for Next Track
+      // Circular navigation calculation: (currentIndex + 1) % songs.length
+      if (key[0] === 110) {
+        if (songs.length > 0) {
+          const nextIndex = (currentIndex + 1) % songs.length;
+          cursor = nextIndex;
+          playSong(nextIndex);
+          drawMenu();
+        }
+        return;
+      }
+
+      // 7. Detect 'b' (byte value 98) for Previous Track
+      // Circular navigation backwards calculation: (currentIndex - 1 + songs.length) % songs.length
+      if (key[0] === 98) {
+        if (songs.length > 0) {
+          const prevIndex = (currentIndex - 1 + songs.length) % songs.length;
+          cursor = prevIndex;
+          playSong(prevIndex);
+          drawMenu();
         }
         return;
       }
