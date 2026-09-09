@@ -103,12 +103,13 @@ function drawMenu() {
 
   // Display currently playing song status if player is active
   if (player) {
-    output += `\nNow Playing: ${songs[currentIndex]}\n`;
+    const statusLabel = paused ? "[Paused]" : "[Playing]";
+    output += `\nNow Playing: ${songs[currentIndex]} ${statusLabel}\n`;
   } else {
     output += `\nStatus: Stopped\n`;
   }
 
-  output += "\n(Use UP/DOWN arrows to navigate, ENTER to play, Ctrl+C to exit)\n";
+  output += "\n(UP/DOWN: Navigate | ENTER: Play | p: Pause/Resume | q: Quit)\n";
 
   // Write the entire screen in one single call to prevent any flicker or extra lines
   process.stdout.write(output);
@@ -145,8 +146,9 @@ try {
     // Listen for data events on process.stdin.
     // `key` is a Node.js Buffer containing the raw binary byte(s) received from the terminal.
     process.stdin.on("data", (key) => {
-      // 1. Detect Ctrl+C (byte value 3)
-      if (key[0] === 3) {
+      // 1. Detect 'q', 'Q', or Ctrl+C (3) to exit cleanly
+      // 'q' is ASCII 113, 'Q' is ASCII 81, Ctrl+C is ASCII 3
+      if (key[0] === 113 || key[0] === 81 || key[0] === 3) {
         cleanupAndExit();
         return;
       }
@@ -172,6 +174,29 @@ try {
       // 4. Detect ENTER key (byte value 13)
       if (key[0] === 13) {
         playSong(cursor);
+        return;
+      }
+
+      // 5. Detect 'p' or 'P' (byte values 112 / 80) for Pause / Resume
+      // Conceptual Signal Notes:
+      // - SIGSTOP: Temporarily stops/freezes the OS process without terminating it.
+      // - SIGCONT: Tells a stopped/frozen process to continue execution.
+      // - SIGKILL: Forcefully terminates a process (cannot be used for pause).
+      // Limitation:
+      // SIGSTOP is an operating-system level process freeze rather than a dedicated
+      // media-player pause API. Audio buffering and timing behavior depend on the OS and audio daemon.
+      if (key[0] === 112 || key[0] === 80) {
+        if (player) {
+          if (!paused) {
+            player.kill("SIGSTOP");
+            paused = true;
+            drawMenu();
+          } else {
+            player.kill("SIGCONT");
+            paused = false;
+            drawMenu();
+          }
+        }
         return;
       }
     });
